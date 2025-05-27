@@ -39,21 +39,25 @@ class ButterflyBacktest:
             return False
         # enter if predicted vol < realized vol
         if pred_vol >= realized_vol_90d:
+            print(f"Skipping entry on {entry_day}: Predicted vol {pred_vol} >= Realized vol {realized_vol_90d}")
             return False
         
 
         # Underlying volume filter
         underlying_row = self.underlying_data[self.underlying_data['timestamp'] == entry_day]
-        if underlying_row.empty or underlying_row['close'].values[0] <= 0:
+        if underlying_row.empty or underlying_row['close'].values[0] <= 0: # if no underlying data or price is zero
             return False
-        if 'volume' in underlying_row and underlying_row['volume'].values[0] < self.min_volume:
+        if 'volume' in underlying_row and underlying_row['volume'].values[0] < self.min_volume: # if underlying volume is too low
+            print(f"Skipping entry on {entry_day}: Underlying volume {underlying_row['volume'].values[0]} < {self.min_volume}")
             return False
 
         # Option liquidity filter
         for leg in butterfly.values():
-            if ('open_interest' in leg and (pd.isna(leg['open_interest']) or leg['open_interest'] < self.min_open_interest)):
+            if ('open_interest' in leg and (pd.isna(leg['open_interest']) or leg['open_interest'] < self.min_open_interest)): # skip if open interest is too low
+                print(f"Skipping entry on {entry_day}: Open interest {leg['open_interest']} < {self.min_open_interest}")
                 return False
-            if ('close_price' in leg and (pd.isna(leg['close_price']) or leg['close_price'] <= 0)):
+            if ('opt_close' in leg and (pd.isna(leg['opt_close']) or leg['opt_close'] <= 0)):
+                print(f"Skipping entry on {entry_day}: Option price {leg['opt_close']} <= 0")
                 return False
 
         # Cost filter: don't enter if butterfly is too expensive
@@ -62,10 +66,11 @@ class ButterflyBacktest:
         k3 = butterfly['long3']['strike_price']
         spread_width = k3 - k2  # assuming symmetric butterfly
 
-        entry_price = butterfly['long1']['close_price'] + butterfly['long3']['close_price'] - 2 * butterfly['short2']['close_price']
+        entry_price = butterfly['long1']['opt_close'] + butterfly['long3']['opt_close'] - 2 * butterfly['short2']['opt_close']
         max_profit = spread_width  # max payoff if ATM at expiry
 
-        if entry_price > 0.5 * max_profit:
+        if entry_price > 0.7 * max_profit: # if entry price is more than 70% of max profit, skip
+            print(f"Skipping entry on {entry_day}: Entry price {entry_price} > 70% of max profit {max_profit}")
             return False
 
         return True
@@ -107,7 +112,8 @@ class ButterflyBacktest:
         if pd.isna(pred_vol_now) or pd.isna(pred_vol_entry):
             return False
         # Exit if predicted vol changes by more than threshold (relative)
-        if abs(pred_vol_now - pred_vol_entry) / pred_vol_entry > self.vol_exit_threshold:
+        if abs(pred_vol_now - pred_vol_entry) / pred_vol_entry > self.vol_exit_threshold: 
+            print(f"Early exit on {current_day}: Predicted vol changed from {pred_vol_entry} to {pred_vol_now}")
             return True
         return False
     
@@ -122,179 +128,179 @@ class ButterflyBacktest:
             ]
             if match.empty:
                 return None
-            exit_prices[leg] = match.iloc[0]['close_price']
+            exit_prices[leg] = match.iloc[0]['opt_close']
         return exit_prices
 
-def run(self, option_type='call', starting_cash=1000):
-    results = []
-    cash = starting_cash
-    equity_curve = []
-    open_trades = []
+    def run(self, option_type='call', starting_cash=1000):
+        results = []
+        cash = starting_cash
+        equity_curve = []
+        open_trades = []
 
-    # Combine all relevant dates (trading days and expiries)
-    all_dates = sorted(set(self.underlying_data['timestamp']) | set(self.options_data['expiration_date']))
+        # Combine all relevant dates (trading days and expiries)
+        all_dates = sorted(set(self.underlying_data['timestamp']) | set(self.options_data['expiration_date']))
 
-    for day in all_dates:
-        # 1. Check for new trade opportunities (entry)
-        if day in self.underlying_data['timestamp']:
-            # Find expiry 5 trading days ahead
-            expiry_candidates = self.options_data[
-                (self.options_data['timestamp'] == day) & (self.options_data['dtm'] == 5)
-            ]['expiration_date'].unique()
-            if len(expiry_candidates) == 0:
-                continue
-            expiry = expiry_candidates[0]
-            options_day = self.options_data[
-                (self.options_data['timestamp'] == day) &
-                (self.options_data['expiration_date'] == expiry) &
-                (self.options_data['type'] == option_type)
-            ]
-            if options_day.empty:
-                continue
-            butterfly = self.construct_butterfly(options_day)
-            if butterfly is None:
-                continue
-            pred_vol_entry = self.get_predicted_vol(day, expiry)
-            if not self.entry_rule(day, expiry, butterfly):
-                continue
-
-            # Calculate entry price and costs
-            entry_price = butterfly['long1']['close_price'] + butterfly['long3']['close_price'] - 2 * butterfly['short2']['close_price']
-            total_legs = 4
-            total_commission = self.commission * total_legs
-            total_slippage = self.slippage * (abs(butterfly['long1']['close_price']) +
-                                              abs(butterfly['long3']['close_price']) +
-                                              2 * abs(butterfly['short2']['close_price']))
-            total_cost_per_butterfly = entry_price + total_commission + total_slippage
-
-            # Liquidity constraints
-            min_oi = min(
-                butterfly['long1'].get('open_interest', np.inf),
-                butterfly['long3'].get('open_interest', np.inf),
-                butterfly['short2'].get('open_interest', np.inf) // 2
-            )
-            min_vol = min(
-                butterfly['long1'].get('volume', np.inf),
-                butterfly['long3'].get('volume', np.inf),
-                butterfly['short2'].get('volume', np.inf) // 2
-            )
-            max_liquidity = int(min(min_oi, min_vol))
-
-            # Max butterflies to buy
-            n_butterflies = min(int(cash // total_cost_per_butterfly), max_liquidity)
-            if n_butterflies < 1:
-                continue
-
-            total_entry_cost = total_cost_per_butterfly * n_butterflies
-
-            # Enter trade: subtract cost, add to open trades
-            cash -= total_entry_cost
-            open_trades.append({
-                'entry_date': day,
-                'expiry': expiry,
-                'butterfly': butterfly,
-                'entry_price': entry_price,
-                'commission': total_commission,
-                'slippage': total_slippage,
-                'total_cost': total_entry_cost,
-                'n_butterflies': n_butterflies,
-                'pred_vol_entry': pred_vol_entry
-            })
-
-        # 2. Check for early exit or expiry for open trades
-        to_remove = []
-        for i, trade in enumerate(open_trades):
-            # Early exit if volatility prediction changes radically
-            early_exit = self.should_exit_early(trade, day)
-            is_expiry = (trade['expiry'] == day)
-            if early_exit or is_expiry:
-                exit_prices = self.get_exit_prices(trade['butterfly'], day)
-                if exit_prices is None:
+        for day in all_dates:
+            # 1. Check for new trade opportunities (entry)
+            if day in self.underlying_data['timestamp']:
+                # Find expiry 5 trading days ahead
+                expiry_candidates = self.options_data[
+                    (self.options_data['timestamp'] == day) & (self.options_data['dtm'] == 5)
+                ]['expiration_date'].unique()
+                if len(expiry_candidates) == 0:
                     continue
-                exit_price = exit_prices['long1'] + exit_prices['long3'] - 2 * exit_prices['short2']
-                exit_slippage = self.slippage * (abs(exit_prices['long1']) +
-                                                 abs(exit_prices['long3']) +
-                                                 2 * abs(exit_prices['short2']))
-                total_exit_value = exit_price * trade['n_butterflies']
-                total_slippage_all = (trade['slippage'] + exit_slippage) * trade['n_butterflies']
-                total_commission_all = trade['commission'] * trade['n_butterflies']
-                pnl = (exit_price - trade['entry_price'] - trade['commission'] - trade['slippage'] - exit_slippage) * trade['n_butterflies']
-                cash += total_exit_value
+                expiry = expiry_candidates[0]
+                options_day = self.options_data[
+                    (self.options_data['timestamp'] == day) &
+                    (self.options_data['expiration_date'] == expiry) &
+                    (self.options_data['type'] == option_type)
+                ]
+                if options_day.empty:
+                    continue
+                butterfly = self.construct_butterfly(options_day)
+                if butterfly is None:
+                    continue
+                pred_vol_entry = self.get_predicted_vol(day, expiry)
+                if not self.entry_rule(day, expiry, butterfly):
+                    continue
 
-                results.append({
-                    'entry_date': trade['entry_date'],
-                    'exit_date': day,
-                    'expiry': trade['expiry'],
-                    'entry_price': trade['entry_price'],
-                    'exit_price': exit_price,
-                    'n_butterflies': trade['n_butterflies'],
-                    'pnl': pnl,
-                    'underlying_price': self.underlying_data.loc[self.underlying_data['timestamp'] == trade['entry_date'], 'close'].values[0],
-                    'strikes': (trade['butterfly']['long1']['strike_price'],
-                                trade['butterfly']['short2']['strike_price'],
-                                trade['butterfly']['long3']['strike_price']),
-                    'commission': total_commission_all,
-                    'slippage': total_slippage_all,
-                    'cash_after_trade': cash,
-                    'early_exit': early_exit
+                # Calculate entry price and costs
+                entry_price = butterfly['long1']['opt_close'] + butterfly['long3']['opt_close'] - 2 * butterfly['short2']['opt_close']
+                total_legs = 4
+                total_commission = self.commission * total_legs
+                total_slippage = self.slippage * (abs(butterfly['long1']['opt_close']) +
+                                                abs(butterfly['long3']['opt_close']) +
+                                                2 * abs(butterfly['short2']['opt_close']))
+                total_cost_per_butterfly = entry_price + total_commission + total_slippage
+
+                # Liquidity constraints
+                min_oi = min(
+                    butterfly['long1'].get('open_interest', np.inf),
+                    butterfly['long3'].get('open_interest', np.inf),
+                    butterfly['short2'].get('open_interest', np.inf) // 2
+                )
+                min_vol = min(
+                    butterfly['long1'].get('volume', np.inf),
+                    butterfly['long3'].get('volume', np.inf),
+                    butterfly['short2'].get('volume', np.inf) // 2
+                )
+                max_liquidity = int(min(min_oi, min_vol))
+
+                # Max butterflies to buy
+                n_butterflies = min(int(cash // total_cost_per_butterfly), max_liquidity)
+                if n_butterflies < 1:
+                    continue
+
+                total_entry_cost = total_cost_per_butterfly * n_butterflies
+
+                # Enter trade: subtract cost, add to open trades
+                cash -= total_entry_cost
+                open_trades.append({
+                    'entry_date': day,
+                    'expiry': expiry,
+                    'butterfly': butterfly,
+                    'entry_price': entry_price,
+                    'commission': total_commission,
+                    'slippage': total_slippage,
+                    'total_cost': total_entry_cost,
+                    'n_butterflies': n_butterflies,
+                    'pred_vol_entry': pred_vol_entry
                 })
-                to_remove.append(i)
-        for idx in sorted(to_remove, reverse=True):
-            open_trades.pop(idx)
 
-        # 3. Mark-to-market for equity
-        mtm_value = 0
-        for trade in open_trades:
-            current_prices = self.get_exit_prices(trade['butterfly'], day)
-            if current_prices is not None:
-                mtm_value += (current_prices['long1'] + current_prices['long3'] - 2 * current_prices['short2']) * trade['n_butterflies']
-        equity_curve.append({'date': day, 'cash': cash, 'equity': cash + mtm_value})
+            # 2. Check for early exit or expiry for open trades
+            to_remove = []
+            for i, trade in enumerate(open_trades):
+                # Early exit if volatility prediction changes radically
+                early_exit = self.should_exit_early(trade, day)
+                is_expiry = (trade['expiry'] == day)
+                if early_exit or is_expiry:
+                    exit_prices = self.get_exit_prices(trade['butterfly'], day)
+                    if exit_prices is None:
+                        continue
+                    exit_price = exit_prices['long1'] + exit_prices['long3'] - 2 * exit_prices['short2']
+                    exit_slippage = self.slippage * (abs(exit_prices['long1']) +
+                                                    abs(exit_prices['long3']) +
+                                                    2 * abs(exit_prices['short2']))
+                    total_exit_value = exit_price * trade['n_butterflies']
+                    total_slippage_all = (trade['slippage'] + exit_slippage) * trade['n_butterflies']
+                    total_commission_all = trade['commission'] * trade['n_butterflies']
+                    pnl = (exit_price - trade['entry_price'] - trade['commission'] - trade['slippage'] - exit_slippage) * trade['n_butterflies']
+                    cash += total_exit_value
 
-    results_df = pd.DataFrame(results)
-    equity_df = pd.DataFrame(equity_curve)
+                    results.append({
+                        'entry_date': trade['entry_date'],
+                        'exit_date': day,
+                        'expiry': trade['expiry'],
+                        'entry_price': trade['entry_price'],
+                        'exit_price': exit_price,
+                        'n_butterflies': trade['n_butterflies'],
+                        'pnl': pnl,
+                        'underlying_price': self.underlying_data.loc[self.underlying_data['timestamp'] == trade['entry_date'], 'close'].values[0],
+                        'strikes': (trade['butterfly']['long1']['strike_price'],
+                                    trade['butterfly']['short2']['strike_price'],
+                                    trade['butterfly']['long3']['strike_price']),
+                        'commission': total_commission_all,
+                        'slippage': total_slippage_all,
+                        'cash_after_trade': cash,
+                        'early_exit': early_exit
+                    })
+                    to_remove.append(i)
+            for idx in sorted(to_remove, reverse=True):
+                open_trades.pop(idx)
 
-    # Add summary statistics
-    if not results_df.empty:
-        total_trades = len(results_df)
-        total_profit = results_df['pnl'].sum()
-        avg_profit = results_df['pnl'].mean()
-        win_rate = (results_df['pnl'] > 0).mean()
-        max_drawdown = (equity_df['equity'].cummax() - equity_df['equity']).max()
-        ending_cash = cash
-        ending_equity = equity_df['equity'].iloc[-1]
-        stats = {
-            'total_trades': total_trades,
-            'total_profit': total_profit,
-            'avg_profit': avg_profit,
-            'win_rate': win_rate,
-            'max_drawdown': max_drawdown,
-            'ending_cash': ending_cash,
-            'ending_equity': ending_equity
-        }
-        print("Backtest Statistics (1 Year):")
-        for k, v in stats.items():
-            print(f"{k}: {v}")
-    else:
-        print("No trades executed.")
+            # 3. Mark-to-market for equity
+            mtm_value = 0
+            for trade in open_trades:
+                current_prices = self.get_exit_prices(trade['butterfly'], day)
+                if current_prices is not None:
+                    mtm_value += (current_prices['long1'] + current_prices['long3'] - 2 * current_prices['short2']) * trade['n_butterflies']
+            equity_curve.append({'date': day, 'cash': cash, 'equity': cash + mtm_value})
 
-    # Plot cash and equity curve with trade signals
-    if not equity_df.empty:
-        plt.figure(figsize=(12, 6))
-        plt.plot(equity_df['date'], equity_df['cash'], label='Cash Balance', color='blue')
-        plt.plot(equity_df['date'], equity_df['equity'], label='Total Equity', color='green')
+        results_df = pd.DataFrame(results)
+        equity_df = pd.DataFrame(equity_curve)
+
+        # Add summary statistics
         if not results_df.empty:
-            plt.scatter(results_df['entry_date'], results_df['cash_after_trade'], color='red', marker='^', label='Trade Entry')
-        plt.title('Account Cash & Equity Over Time')
-        plt.xlabel('Date')
-        plt.ylabel('Value ($)')
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
-        plt.show()
-    else:
-        print("No equity data to plot.")
+            total_trades = len(results_df)
+            total_profit = results_df['pnl'].sum()
+            avg_profit = results_df['pnl'].mean()
+            win_rate = (results_df['pnl'] > 0).mean()
+            max_drawdown = (equity_df['equity'].cummax() - equity_df['equity']).max()
+            ending_cash = cash
+            ending_equity = equity_df['equity'].iloc[-1]
+            stats = {
+                'total_trades': total_trades,
+                'total_profit': total_profit,
+                'avg_profit': avg_profit,
+                'win_rate': win_rate,
+                'max_drawdown': max_drawdown,
+                'ending_cash': ending_cash,
+                'ending_equity': ending_equity
+            }
+            print("Backtest Statistics (1 Year):")
+            for k, v in stats.items():
+                print(f"{k}: {v}")
+        else:
+            print("No trades executed.")
 
-    return results_df, equity_df
+        # Plot cash and equity curve with trade signals
+        if not equity_df.empty:
+            plt.figure(figsize=(12, 6))
+            plt.plot(equity_df['date'], equity_df['cash'], label='Cash Balance', color='blue')
+            plt.plot(equity_df['date'], equity_df['equity'], label='Total Equity', color='green')
+            if not results_df.empty:
+                plt.scatter(results_df['entry_date'], results_df['cash_after_trade'], color='red', marker='^', label='Trade Entry')
+            plt.title('Account Cash & Equity Over Time')
+            plt.xlabel('Date')
+            plt.ylabel('Value ($)')
+            plt.legend()
+            plt.grid(True)
+            plt.tight_layout()
+            plt.show()
+        else:
+            print("No equity data to plot.")
+
+        return results_df, equity_df
 
 
 
@@ -344,7 +350,7 @@ def run(self, option_type='call', starting_cash=1000):
 #         if not self.entry_rule(day, butterfly, option_type): # Entry rule not met
 #             print(f"Entry rule not met for {day}.")
 #             continue
-#         entry_price = butterfly['long1']['close_price'] + butterfly['long3']['close_price'] - 2 * butterfly['short2']['close_price']
+#         entry_price = butterfly['long1']['opt_close'] + butterfly['long3']['opt_close'] - 2 * butterfly['short2']['opt_close']
 #         expiry = butterfly['long1']['expiration_date']
 #         exit_prices = self.get_exit_prices(butterfly, expiry) 
 #         if exit_prices is None: # No exit prices available for expiry
@@ -354,9 +360,9 @@ def run(self, option_type='call', starting_cash=1000):
 #         # Trading costs: commission and slippage (per leg, both entry and exit)
 #         total_legs = 4  # 2 long, 2 short
 #         total_commission = self.commission * total_legs
-#         total_slippage = self.slippage * (abs(butterfly['long1']['close_price']) +
-#                                           abs(butterfly['long3']['close_price']) +
-#                                           2 * abs(butterfly['short2']['close_price']))
+#         total_slippage = self.slippage * (abs(butterfly['long1']['opt_close']) +
+#                                           abs(butterfly['long3']['opt_close']) +
+#                                           2 * abs(butterfly['short2']['opt_close']))
 #         total_slippage += self.slippage * (abs(exit_prices['long1']) +
 #                                            abs(exit_prices['long3']) +
 #                                            2 * abs(exit_prices['short2']))
