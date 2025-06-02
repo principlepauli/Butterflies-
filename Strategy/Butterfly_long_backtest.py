@@ -3,22 +3,23 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-class ButterflyBacktest:
-    def __init__(self, options_data, underlying_data, vol_predictions, spread_pct=0.01, commission=1.0, slippage=0.01, min_open_interest=10, min_volume=1, vol_exit_threshold=0.5):
-        self.options_data = options_data
-        self.underlying_data = underlying_data
-        self.vol_predictions = vol_predictions
-        self.spread_pct = spread_pct
-        self.commission = commission
-        self.slippage = slippage
-        self.min_open_interest = min_open_interest
-        self.min_volume = min_volume
-        self.vol_exit_threshold = vol_exit_threshold  # e.g., 0.5 = 50% change triggers exit
+class ButterflyBacktest:  
+    def __init__(self, options_data, underlying_data, vol_predictions, spread_pct=0.01, commission=1.0, slippage=0.01, min_open_interest=10, min_volume=1, vol_exit_threshold=0.5, rolling_window=90):
+        self.options_data = options_data # DataFrame with columns: timestamp, expiration_date, strike_price, type, opt_close, dtm, SPY_close, volume, open_interest
+        self.underlying_data = underlying_data # DataFrame with columns: timestamp, close, volume
+        self.vol_predictions = vol_predictions # DataFrame with columns: prediction_day, predicted_day, predicted_vol
+        self.spread_pct = spread_pct # TUNE!!! percentage of underlying price to determine strike distances
+        self.commission = commission # commission per option leg
+        self.slippage = slippage # slippage per option leg
+        self.min_open_interest = min_open_interest # minimum open interest for options to consider entering a trade
+        self.min_volume = min_volume # minimum volume for underlying to consider entering a trade
+        self.vol_exit_threshold = vol_exit_threshold #  TUNE!!! threshold for early exit based on volatility increase
+        self.rolling_window = rolling_window # TUNE!!! number of days for rolling volatility calculation
 
-        self.underlying_data['realized_vol_90d'] = (
+        self.underlying_data['realized_vol'] = (
             self.underlying_data['close']
             .pct_change()
-            .rolling(90)
+            .rolling(self.rolling_window)
             .std()
             * np.sqrt(252)
         )
@@ -32,14 +33,16 @@ class ButterflyBacktest:
             return row.iloc[0]['predicted_vol']
         return np.nan
 
-    def entry_rule(self, entry_day, expiry_day, butterfly):
-        pred_vol = self.get_predicted_vol(entry_day, expiry_day)
-        realized_vol_90d = self.underlying_data.loc[self.underlying_data['timestamp'] == entry_day, 'realized_vol_90d'].values[0]
-        if pd.isna(pred_vol) or pd.isna(realized_vol_90d):
+    def entry_rule(self, entry_day, butterfly):
+        # Get predicted vol for the next 5 days (single value)
+        pred_row = self.vol_predictions[self.vol_predictions['prediction_day'] == entry_day]
+        if pred_row.empty:
             return False
-        # enter if predicted vol < realized vol
-        if pred_vol >= realized_vol_90d:
-            print(f"Skipping entry on {entry_day}: Predicted vol {pred_vol} >= Realized vol {realized_vol_90d}")
+        pred_vol = pred_row.iloc[0]['predicted_vol']
+        realized_vol = self.underlying_data.loc[self.underlying_data['timestamp'] == entry_day, 'realized_vol'].values[0]
+        if pd.isna(pred_vol) or pd.isna(realized_vol):
+            return False
+        if pred_vol >= realized_vol:
             return False
         
 
@@ -104,16 +107,22 @@ class ButterflyBacktest:
         }
         return legs
     
+
     def should_exit_early(self, open_trade, current_day):
-        # Check if new predicted vol for remaining expiry is radically different
-        expiry_day = open_trade['expiry']
-        pred_vol_now = self.get_predicted_vol(current_day, expiry_day)
+        """
+        Exit if the *new* 5-day volatility prediction (made on current_day) is significantly higher than at entry.
+        """
+        # Get the volatility prediction made on current_day for the next 5 days
+        pred_row = self.vol_predictions[self.vol_predictions['prediction_day'] == current_day]
+        if pred_row.empty:
+            return False
+        pred_vol_now = pred_row.iloc[0]['predicted_vol']
         pred_vol_entry = open_trade['pred_vol_entry']
         if pd.isna(pred_vol_now) or pd.isna(pred_vol_entry):
             return False
-        # Exit if predicted vol changes by more than threshold (relative)
-        if abs(pred_vol_now - pred_vol_entry) / pred_vol_entry > self.vol_exit_threshold: 
-            print(f"Early exit on {current_day}: Predicted vol changed from {pred_vol_entry} to {pred_vol_now}")
+        # Exit if predicted vol increases by more than threshold
+        if (pred_vol_now - pred_vol_entry) / pred_vol_entry > self.vol_exit_threshold:
+            print(f"Early exit on {current_day}: New 5d predicted vol {pred_vol_now} > entry vol {pred_vol_entry} by threshold")
             return True
         return False
     
@@ -143,7 +152,6 @@ class ButterflyBacktest:
         for day in all_dates:
             # 1. Check for new trade opportunities (entry)
             if day in self.underlying_data['timestamp']:
-                # Find expiry 5 trading days ahead
                 expiry_candidates = self.options_data[
                     (self.options_data['timestamp'] == day) & (self.options_data['dtm'] == 5)
                 ]['expiration_date'].unique()
@@ -160,11 +168,14 @@ class ButterflyBacktest:
                 butterfly = self.construct_butterfly(options_day)
                 if butterfly is None:
                     continue
-                pred_vol_entry = self.get_predicted_vol(day, expiry)
-                if not self.entry_rule(day, expiry, butterfly):
+                # Use only the prediction available on entry day
+                pred_row = self.vol_predictions[self.vol_predictions['prediction_day'] == day]
+                if pred_row.empty:
+                    continue
+                pred_vol_entry = pred_row.iloc[0]['predicted_vol']
+                if not self.entry_rule(day, butterfly):
                     continue
 
-                # Calculate entry price and costs
                 entry_price = butterfly['long1']['opt_close'] + butterfly['long3']['opt_close'] - 2 * butterfly['short2']['opt_close']
                 total_legs = 4
                 total_commission = self.commission * total_legs
@@ -186,14 +197,12 @@ class ButterflyBacktest:
                 )
                 max_liquidity = int(min(min_oi, min_vol))
 
-                # Max butterflies to buy
                 n_butterflies = min(int(cash // total_cost_per_butterfly), max_liquidity)
                 if n_butterflies < 1:
                     continue
 
                 total_entry_cost = total_cost_per_butterfly * n_butterflies
 
-                # Enter trade: subtract cost, add to open trades
                 cash -= total_entry_cost
                 open_trades.append({
                     'entry_date': day,
@@ -210,10 +219,19 @@ class ButterflyBacktest:
             # 2. Check for early exit or expiry for open trades
             to_remove = []
             for i, trade in enumerate(open_trades):
-                # Early exit if volatility prediction changes radically
-                early_exit = self.should_exit_early(trade, day)
+                # Early exit logic: check next 2 days' predictions
+                alarm = False
+                for offset in [1, 2]:
+                    next_day = day + pd.Timedelta(days=offset)
+                    pred_row = self.vol_predictions[self.vol_predictions['prediction_day'] == next_day]
+                    if not pred_row.empty:
+                        pred_vol_next = pred_row.iloc[0]['predicted_vol']
+                        if (pred_vol_next - trade['pred_vol_entry']) / trade['pred_vol_entry'] > self.vol_exit_threshold:
+                            alarm = True
+                            print(f"Early exit on {day}: Next day {next_day} predicted vol {pred_vol_next} > entry vol {trade['pred_vol_entry']} by threshold")
+                            break
                 is_expiry = (trade['expiry'] == day)
-                if early_exit or is_expiry:
+                if alarm or is_expiry:
                     exit_prices = self.get_exit_prices(trade['butterfly'], day)
                     if exit_prices is None:
                         continue
@@ -236,13 +254,26 @@ class ButterflyBacktest:
                         'n_butterflies': trade['n_butterflies'],
                         'pnl': pnl,
                         'underlying_price': self.underlying_data.loc[self.underlying_data['timestamp'] == trade['entry_date'], 'close'].values[0],
-                        'strikes': (trade['butterfly']['long1']['strike_price'],
-                                    trade['butterfly']['short2']['strike_price'],
-                                    trade['butterfly']['long3']['strike_price']),
+                        'strikes': (
+                            trade['butterfly']['long1']['strike_price'],
+                            trade['butterfly']['short2']['strike_price'],
+                            trade['butterfly']['long3']['strike_price']
+                        ),
+                        'option_prices_entry': (
+                            trade['butterfly']['long1']['opt_close'],
+                            trade['butterfly']['short2']['opt_close'],
+                            trade['butterfly']['long3']['opt_close']
+                        ),
+                        'option_prices_exit': (
+                            exit_prices['long1'],
+                            exit_prices['short2'],
+                            exit_prices['long3']
+                        ),
+                        'pred_vol_entry': trade['pred_vol_entry'],
                         'commission': total_commission_all,
                         'slippage': total_slippage_all,
                         'cash_after_trade': cash,
-                        'early_exit': early_exit
+                        'early_exit': alarm
                     })
                     to_remove.append(i)
             for idx in sorted(to_remove, reverse=True):
@@ -301,159 +332,3 @@ class ButterflyBacktest:
             print("No equity data to plot.")
 
         return results_df, equity_df
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# -----------------------------
-# def run(self, option_type='call', starting_cash=1000):
-#     results = []
-#     cash = starting_cash
-#     equity_curve = []
-#     for day in self.underlying_data['timestamp']: # Iterate over each trading day
-#         if cash <= 0:
-#             print("Insufficient cash to continue trading.")
-#             break
-#         if day not in self.pred_vol_series.index: # Skip if no prediction for this day
-#             continue
-#         if pd.isna(self.underlying_data.loc[self.underlying_data['timestamp'] == day, 'realized_vol_90d']).all(): # Skip if no realized vol data
-#             continue
-#         options_day = self.select_options_for_day(day, option_type) 
-#         if options_day.empty: # No options data for this day
-#             continue
-#         butterfly = self.construct_butterfly(options_day) #
-#         if butterfly is None: # No valid butterfly found
-#             print(f"No valid butterfly found for {day}.")
-#             continue
-#         if not self.entry_rule(day, butterfly, option_type): # Entry rule not met
-#             print(f"Entry rule not met for {day}.")
-#             continue
-#         entry_price = butterfly['long1']['opt_close'] + butterfly['long3']['opt_close'] - 2 * butterfly['short2']['opt_close']
-#         expiry = butterfly['long1']['expiration_date']
-#         exit_prices = self.get_exit_prices(butterfly, expiry) 
-#         if exit_prices is None: # No exit prices available for expiry
-#             continue
-#         exit_price = exit_prices['long1'] + exit_prices['long3'] - 2 * exit_prices['short2']
-
-#         # Trading costs: commission and slippage (per leg, both entry and exit)
-#         total_legs = 4  # 2 long, 2 short
-#         total_commission = self.commission * total_legs
-#         total_slippage = self.slippage * (abs(butterfly['long1']['opt_close']) +
-#                                           abs(butterfly['long3']['opt_close']) +
-#                                           2 * abs(butterfly['short2']['opt_close']))
-#         total_slippage += self.slippage * (abs(exit_prices['long1']) +
-#                                            abs(exit_prices['long3']) +
-#                                            2 * abs(exit_prices['short2']))
-
-#         total_cost_per_butterfly = entry_price + total_commission + total_slippage
-
-#         # Find the minimum available contracts you can realistically buy
-#         min_oi = min(
-#             butterfly['long1'].get('open_interest', np.inf),
-#             butterfly['long3'].get('open_interest', np.inf),
-#             butterfly['short2'].get('open_interest', np.inf) // 2  # short 2 contracts
-#         )
-#         min_vol = min(
-#             butterfly['long1'].get('volume', np.inf),
-#             butterfly['long3'].get('volume', np.inf),
-#             butterfly['short2'].get('volume', np.inf) // 2
-#         )
-#         max_liquidity = int(min(min_oi, min_vol))
-
-#         # Calculate how many butterflies we can buy, considering both cash and liquidity
-#         n_butterflies = min(int(cash // total_cost_per_butterfly), max_liquidity)
-#         if n_butterflies < 1:
-#             continue
-
-#         # Scale all costs and P&L by n_butterflies
-#         total_entry_cost = total_cost_per_butterfly * n_butterflies
-#         total_exit_value = exit_price * n_butterflies
-#         total_commission_all = total_commission * n_butterflies
-#         total_slippage_all = total_slippage * n_butterflies
-#         pnl = (exit_price - entry_price - total_commission - total_slippage) * n_butterflies
-
-#         # Enter trade: subtract cost
-#         cash -= total_entry_cost
-
-#         # Exit trade: add proceeds
-#         cash += total_exit_value
-
-#         results.append({
-#             'entry_date': day,
-#             'expiry': expiry,
-#             'entry_price': entry_price,
-#             'exit_price': exit_price,
-#             'n_butterflies': n_butterflies,
-#             'pnl': pnl,
-#             'underlying_price': self.underlying_data.loc[self.underlying_data['timestamp'] == day, 'close'].values[0],
-#             'strikes': (butterfly['long1']['strike_price'], butterfly['short2']['strike_price'], butterfly['long3']['strike_price']),
-#             'commission': total_commission_all,
-#             'slippage': total_slippage_all,
-#             'cash_after_trade': cash
-#         })
-#         equity_curve.append({'date': expiry, 'cash': cash})
-
-#     results_df = pd.DataFrame(results)
-#     equity_df = pd.DataFrame(equity_curve)
-
-#     # Add summary statistics
-#     if not results_df.empty:
-#         total_trades = len(results_df)
-#         total_profit = results_df['pnl'].sum()
-#         avg_profit = results_df['pnl'].mean()
-#         win_rate = (results_df['pnl'] > 0).mean()
-#         max_drawdown = (results_df['pnl'].cumsum().cummax() - results_df['pnl'].cumsum()).max()
-#         ending_cash = cash
-#         stats = {
-#             'total_trades': total_trades,
-#             'total_profit': total_profit,
-#             'avg_profit': avg_profit,
-#             'win_rate': win_rate,
-#             'max_drawdown': max_drawdown,
-#             'ending_cash': ending_cash
-#         }
-#         print("Backtest Statistics (1 Year):")
-#         for k, v in stats.items():
-#             print(f"{k}: {v}")
-#     else:
-#         print("No trades executed.")
-
-#     # Plot cash balance and trade signals
-#     if not equity_df.empty:
-#         plt.figure(figsize=(12, 6))
-#         plt.plot(equity_df['date'], equity_df['cash'], label='Cash Balance', color='blue')
-#         if not results_df.empty:
-#             plt.scatter(results_df['entry_date'], results_df['cash_after_trade'], color='red', marker='^', label='Trade Entry')
-#         plt.title('Account Cash Balance Over Time')
-#         plt.xlabel('Date')
-#         plt.ylabel('Cash ($)')
-#         plt.legend()
-#         plt.grid(True)
-#         plt.tight_layout()
-#         plt.show()
-#     else:
-#         print("No equity data to plot.")
-
-#     return results_df, equity_df
