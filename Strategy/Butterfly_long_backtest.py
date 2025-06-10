@@ -3,14 +3,18 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
+##### Max investment 20% of open margin 
+##### Margin : max costs the strategy can incur 
+# rf rate = (june 2024-2025,  4.52 %) 4.3,
+
 class ButterflyBacktest:  
     def __init__(self, options_data, underlying_data, vol_predictions, spread_pct=0.01, commission=1.0, slippage=0.01, min_open_interest=10, min_volume=1, vol_exit_threshold=0.5, rolling_window=90):
         self.options_data = options_data # DataFrame with columns: timestamp, expiration_date, strike_price, type, opt_close, dtm, SPY_close, volume, open_interest
         self.underlying_data = underlying_data # DataFrame with columns: timestamp, close, volume
         self.vol_predictions = vol_predictions # DataFrame with columns: prediction_day, predicted_day, predicted_vol
         self.spread_pct = spread_pct # TUNE!!! percentage of underlying price to determine strike distances
-        self.commission = commission # commission per option leg
-        self.slippage = slippage # slippage per option leg
+        self.commission = commission # commission per option leg 0.1 $
+        self.slippage = slippage # slippage per option leg # slippage ignoriable  
         self.min_open_interest = min_open_interest # minimum open interest for options to consider entering a trade
         self.min_volume = min_volume # minimum volume for underlying to consider entering a trade
         self.vol_exit_threshold = vol_exit_threshold #  TUNE!!! threshold for early exit based on volatility increase
@@ -151,6 +155,11 @@ class ButterflyBacktest:
 
         for day in all_dates:
             # 1. Check for new trade opportunities (entry)
+            total_max_loss = sum([trade['entry_price'] * trade['n_butterflies'] for trade in open_trades])
+            margin_available = cash - total_max_loss
+            max_invest_today = 0.2 * margin_available
+
+
             if day in self.underlying_data['timestamp']:
                 expiry_candidates = self.options_data[
                     (self.options_data['timestamp'] == day) & (self.options_data['dtm'] == 5)
@@ -197,7 +206,8 @@ class ButterflyBacktest:
                 )
                 max_liquidity = int(min(min_oi, min_vol))
 
-                n_butterflies = min(int(cash // total_cost_per_butterfly), max_liquidity)
+                # Limit number of butterflies by available margin, not just cash
+                n_butterflies = min(int(max_invest_today // total_cost_per_butterfly), max_liquidity)
                 if n_butterflies < 1:
                     continue
 
@@ -215,6 +225,7 @@ class ButterflyBacktest:
                     'n_butterflies': n_butterflies,
                     'pred_vol_entry': pred_vol_entry
                 })
+
 
             # 2. Check for early exit or expiry for open trades
             to_remove = []
@@ -285,7 +296,16 @@ class ButterflyBacktest:
                 current_prices = self.get_exit_prices(trade['butterfly'], day)
                 if current_prices is not None:
                     mtm_value += (current_prices['long1'] + current_prices['long3'] - 2 * current_prices['short2']) * trade['n_butterflies']
-            equity_curve.append({'date': day, 'cash': cash, 'equity': cash + mtm_value})
+            
+
+
+            equity_curve.append({
+                'date': day,
+                'cash': cash,
+                'equity': cash + mtm_value,
+                'margin_available': margin_available,
+                'total_max_loss': total_max_loss
+            })
 
         results_df = pd.DataFrame(results)
         equity_df = pd.DataFrame(equity_curve)
