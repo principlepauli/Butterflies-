@@ -436,6 +436,8 @@ class ButterflyBacktest_long_short:
                 expiry_candidates = self.options_data[
                     (self.options_data['timestamp'] == day) & (self.options_data['dtm'] == 5)
                 ]['expiration_date'].unique()
+
+                print(f"Found expiry candidates: {len(expiry_candidates)} for day {day}")
                 if len(expiry_candidates) == 0:
                     continue
                 expiry = expiry_candidates[0]
@@ -614,6 +616,7 @@ class ButterflyBacktest_long_short:
                     to_remove.append(i)
             for idx in sorted(to_remove, reverse=True):
                 open_trades.pop(idx)
+                print(f"Removed trade on {day} for {'LONG' if trade['trade_type'] == 'long' else 'SHORT'} butterfly")
 
             # 3. Mark-to-market for equity
             mtm_value = 0
