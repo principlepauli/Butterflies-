@@ -7,17 +7,24 @@ import matplotlib.dates as mdates
 # Butterfly long and short strategy backtest
 
 class ButterflyBacktest_long_short:  
-    def __init__(self, options_data, underlying_data, vol_predictions, spread_pct=0.01, commission=1.0, slippage=0.0, min_open_interest=10, min_volume=1, vol_exit_threshold=0.5, rolling_window=90):
-        self.options_data = options_data # DataFrame with columns: timestamp, expiration_date, strike_price, type, opt_close, dtm, SPY_close_at_current_day, volume, open_interest
-        self.underlying_data = underlying_data # DataFrame with columns: timestamp, close, volume
-        self.vol_predictions = vol_predictions # DataFrame with columns: prediction_day, predicted_day, predicted_vol
-        self.spread_pct = spread_pct # TUNE!!! percentage of underlying price to determine strike distances
-        self.commission = commission # commission per option leg 0.1 $
-        self.slippage = slippage # slippage per option leg # slippage ignoriable  
-        self.min_open_interest = min_open_interest # minimum open interest for options to consider entering a trade
-        self.min_volume = min_volume # minimum volume for underlying to consider entering a trade
-        self.vol_exit_threshold = vol_exit_threshold #  TUNE!!! threshold for early exit based on volatility increase
-        self.rolling_window = rolling_window # TUNE!!! number of days for rolling volatility calculation
+    def __init__(
+        self, options_data, underlying_data, vol_predictions, 
+        spread_pct=0.01, commission=1.0, slippage=0.0, min_open_interest=10, min_volume=1, 
+        vol_exit_threshold=0.5, rolling_window=90, 
+        pct_below=0.98, pct_above=1.02 
+    ):
+        self.options_data = options_data
+        self.underlying_data = underlying_data
+        self.vol_predictions = vol_predictions
+        self.spread_pct = spread_pct
+        self.commission = commission
+        self.slippage = slippage
+        self.min_open_interest = min_open_interest
+        self.min_volume = min_volume
+        self.vol_exit_threshold = vol_exit_threshold
+        self.rolling_window = rolling_window
+        self.pct_below = pct_below  # e.g. 0.98 means 2% below realized vol for long
+        self.pct_above = pct_above  # e.g. 1.02 means 2% above realized vol for short
 
         self.underlying_data['realized_vol'] = (
             self.underlying_data['close']
@@ -102,16 +109,16 @@ class ButterflyBacktest_long_short:
         if pd.isna(pred_vol) or pd.isna(realized_vol):
             print(f"NaN vol for {entry_day}")
             return False
-        if pred_vol >= realized_vol:
-            print(f"Predicted vol {pred_vol} >= realized vol {realized_vol} on {entry_day} (no LONG entry)")
+        # Use threshold for long entry
+        if pred_vol >= self.pct_below * realized_vol:
+            print(f"Predicted vol {pred_vol} >= {self.pct_below} * realized vol {realized_vol} on {entry_day} (no LONG entry)")
             return False
-        
-        print(f"Predicted vol {pred_vol} < realized vol {realized_vol} on {entry_day} (LONG entry allowed)")
 
+        print(f"Predicted vol {pred_vol} < {self.pct_below} * realized vol {realized_vol} on {entry_day} (LONG entry allowed)")
         return self.check_liquidity_and_costs(entry_day, butterfly)
+
     
     def entry_rule_short(self, entry_day, butterfly):
-        # Get predicted vol for the next 5 days (single value)
         pred_row = self.vol_predictions[self.vol_predictions['prediction_day'].dt.date == entry_day]
         print(f"vol_predictions rows for {entry_day}: {len(pred_row)}")
         print(f"underlying_data rows for {entry_day}: {len(self.underlying_data[self.underlying_data['timestamp'].dt.date == entry_day])}")
@@ -130,14 +137,12 @@ class ButterflyBacktest_long_short:
         if pd.isna(pred_vol) or pd.isna(realized_vol):
             print(f"NaN vol for {entry_day}")
             return False
-        # For short: only enter if predicted vol is HIGHER than realized vol
-        if pred_vol <= realized_vol:
-            print(f"Predicted vol {pred_vol} <= realized vol {realized_vol} on {entry_day} (no SHORT entry)")
+        # Use threshold for short entry
+        if pred_vol <= self.pct_above * realized_vol:
+            print(f"Predicted vol {pred_vol} <= {self.pct_above} * realized vol {realized_vol} on {entry_day} (no SHORT entry)")
             return False
-        
-        print(f"Predicted vol {pred_vol} > realized vol {realized_vol} on {entry_day} (SHORT entry allowed)")
 
-
+        print(f"Predicted vol {pred_vol} > {self.pct_above} * realized vol {realized_vol} on {entry_day} (SHORT entry allowed)")
         return self.check_liquidity_and_costs(entry_day, butterfly)
     
 
@@ -224,9 +229,10 @@ class ButterflyBacktest_long_short:
                     (self.options_data['timestamp'].dt.date == exit_day)
                 )
                 match = self.options_data[mask]
-                print(f"  Found {len(match)} rows for {leg} on {exit_day}")
+                #print(f"  Found {len(match)} rows for {leg} on {exit_day}")
                 if not match.empty:
                     print(match[['timestamp', 'expiration_date', 'strike_price', 'type', 'close_price_on_expiry', 'opt_close']])
+
                 if not match.empty and not pd.isna(match.iloc[0]['close_price_on_expiry']):
                     exit_prices[leg] = match.iloc[0]['close_price_on_expiry']
                 elif not match.empty:
@@ -301,7 +307,7 @@ class ButterflyBacktest_long_short:
 ###################################################################################################
 
 
-    def run(self, option_type='call', starting_cash=1000):
+    def run(self, option_type='call', starting_cash=1000, risk_free_rate=0.045):
         results = []
         cash = starting_cash
         equity_curve = []
@@ -314,6 +320,7 @@ class ButterflyBacktest_long_short:
         print("Total dates to process:", len(all_dates))
 
         for day in all_dates:
+            print(f"\nProcessing date: {day}")
             # Set margin and max invest per trade (customize as needed)
             margin_available = cash 
             max_invest_today = margin_available * 0.2
@@ -345,7 +352,7 @@ class ButterflyBacktest_long_short:
                     if not realized_vol_row.empty:
                         realized_vol = realized_vol_row['realized_vol'].values[0]
                         if not pd.isna(pred_vol) and not pd.isna(realized_vol):
-                            if pred_vol < realized_vol:
+                            if pred_vol < self.pct_below * realized_vol:
                                 # Try LONG butterfly only
                                 butterfly_long = self.construct_long_butterfly(options_day)
                                 if butterfly_long is not None and self.entry_rule_long(day, butterfly_long):
@@ -386,7 +393,7 @@ class ButterflyBacktest_long_short:
                                         })
                                 else:
                                     print(f"No valid LONG butterfly for {day}")
-                            elif pred_vol > realized_vol:
+                            elif pred_vol >  self.pct_above * realized_vol:
                                 # Try SHORT butterfly only
                                 butterfly_short = self.construct_short_butterfly(options_day)
                                 if butterfly_short is not None and self.entry_rule_short(day, butterfly_short):
@@ -428,7 +435,7 @@ class ButterflyBacktest_long_short:
                                 else:
                                     print(f"No valid SHORT butterfly for {day}")
                             else:
-                                print(f"Predicted vol equals realized vol on {day}, no trade.")
+                                print(f"Predicted vol not far enough from realized vol on {day}, no trade.")
                         else:
                             print(f"NaN vol for {day}")
                     else:
@@ -511,7 +518,8 @@ class ButterflyBacktest_long_short:
                     'exit_price': exit_price,
                     'n_butterflies': trade['n_butterflies'],
                     'pnl': pnl,
-                    'underlying_price': self.underlying_data.loc[self.underlying_data['timestamp'].dt.date == trade['entry_date'], 'close'].values[0],
+                    'underlying_price_entry': self.underlying_data.loc[self.underlying_data['timestamp'].dt.date == trade['entry_date'], 'close'].values[0],
+                    'underlying_price_exit': self.underlying_data.loc[self.underlying_data['timestamp'].dt.date == day, 'close'].values[0],
                     'strikes': strikes,
                     'option_prices_entry': option_prices_entry,
                     'option_prices_exit': option_prices_exit,
@@ -576,6 +584,7 @@ class ButterflyBacktest_long_short:
         results_df = pd.DataFrame(results)
         equity_df = pd.DataFrame(equity_curve)
 
+
         # Add summary statistics
         if not results_df.empty:
             total_trades = len(results_df)
@@ -585,20 +594,78 @@ class ButterflyBacktest_long_short:
             max_drawdown = (equity_df['equity'].cummax() - equity_df['equity']).max()
             ending_cash = cash
             ending_equity = equity_df['equity'].iloc[-1]
+
+            # --- Financial statistics ---
+            equity_df = equity_df.sort_values('date')
+            equity_df['returns'] = equity_df['equity'].pct_change().fillna(0)
+            n_days = len(equity_df)
+            n_years = n_days / 252  # Approximate trading days in a year
+
+            # Annualized return (CAGR)
+            start_equity = equity_df['equity'].iloc[0]
+            end_equity = equity_df['equity'].iloc[-1]
+            cagr = (end_equity / start_equity) ** (252 / n_days) - 1 if n_days > 1 else np.nan
+
+            # Annualized volatility
+            ann_vol = equity_df['returns'].std() * np.sqrt(252)
+
+            # Sharpe ratio (risk-free rate as parameter)
+            excess_returns = equity_df['returns'] - (risk_free_rate / 252)
+            sharpe = (excess_returns.mean() / equity_df['returns'].std()) * np.sqrt(252) if equity_df['returns'].std() > 0 else np.nan
+
+            # Sortino ratio (downside deviation, risk-free rate as parameter)
+            downside = np.where(excess_returns < 0, excess_returns, 0)
+            downside_std = np.sqrt(np.mean(downside ** 2))
+            sortino = (excess_returns.mean() / downside_std) * np.sqrt(252) if downside_std > 0 else np.nan
+
+            # Calmar ratio
+            calmar = cagr / max_drawdown if max_drawdown > 0 else np.nan
+
             stats = {
                 'total_trades': total_trades,
                 'total_profit': total_profit,
-                'avg_profit': avg_profit,
-                'win_rate': win_rate,
+                'avg_profit per trade': avg_profit,
+                'win_rate (Percentage of profitable trades)': win_rate,
                 'max_drawdown': max_drawdown,
                 'ending_cash': ending_cash,
-                'ending_equity': ending_equity
+                'ending_equity': ending_equity,
+                'annualized_return (CAGR)': cagr,
+                'annualized_volatility': ann_vol,
+                'sharpe_ratio': sharpe,
+                'sortino_ratio': sortino,
+                'calmar_ratio': calmar
             }
             print("Backtest Statistics (1 Year):")
             for k, v in stats.items():
-                print(f"{k}: {v}")
+                print(f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}")
+
+            # --- Long vs Short trade statistics ---
+            long_trades = results_df[results_df['trade_type'] == 'long']
+            short_trades = results_df[results_df['trade_type'] == 'short']
+
+            print("\nLong Butterfly Trades:")
+            if not long_trades.empty:
+                print(f"  Count: {len(long_trades)}")
+                print(f"  Total PnL: {long_trades['pnl'].sum():.2f}")
+                print(f"  Avg PnL: {long_trades['pnl'].mean():.2f}")
+                print(f"  Win rate: {(long_trades['pnl'] > 0).mean():.2%}")
+                print(f"  Max Drawdown: {(equity_df.set_index('date').loc[long_trades['exit_date']]['equity'].cummax() - equity_df.set_index('date').loc[long_trades['exit_date']]['equity']).max():.2f}")
+            else:
+                print("  No long butterfly trades.")
+
+            print("\nShort Butterfly Trades:")
+            if not short_trades.empty:
+                print(f"  Count: {len(short_trades)}")
+                print(f"  Total PnL: {short_trades['pnl'].sum():.2f}")
+                print(f"  Avg PnL: {short_trades['pnl'].mean():.2f}")
+                print(f"  Win rate: {(short_trades['pnl'] > 0).mean():.2%}")
+                print(f"  Max Drawdown: {(equity_df.set_index('date').loc[short_trades['exit_date']]['equity'].cummax() - equity_df.set_index('date').loc[short_trades['exit_date']]['equity']).max():.2f}")
+            else:
+                print("  No short butterfly trades.")
+
         else:
             print("No trades executed.")
+
 
         # Visualization (as in your code)
         if not equity_df.empty:
