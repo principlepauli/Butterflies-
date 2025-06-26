@@ -326,128 +326,369 @@ class ButterflyBacktest_long_short:
 
         return False
 
+# # Full plotting logic
+# # Individual plots for backtest results and additional analysis
+#     def plot_results(self, results_df, equity_df):
+#         import matplotlib.pyplot as plt
+#         import matplotlib.dates as mdates
+#         import seaborn as sns
+#         import pandas as pd
 
-# Full plotting logic
-    def plot_results(self, results_df, equity_df):  
+#         if not equity_df.empty and not results_df.empty:
+#             equity_df['date'] = pd.to_datetime(equity_df['date'])
+#             if equity_df['date'].dt.tz is None:
+#                 equity_df['date'] = equity_df['date'].dt.tz_localize('UTC')
+#             else:
+#                 equity_df['date'] = equity_df['date'].dt.tz_convert('UTC')
+
+#             equity_df = equity_df.sort_values('date')
+
+#             results_df['entry_date'] = pd.to_datetime(results_df['entry_date'])
+#             results_df['exit_date'] = pd.to_datetime(results_df['exit_date'])
+#             if results_df['entry_date'].dt.tz is None:
+#                 results_df['entry_date'] = results_df['entry_date'].dt.tz_localize('UTC')
+#             else:
+#                 results_df['entry_date'] = results_df['entry_date'].dt.tz_convert('UTC')
+#             if results_df['exit_date'].dt.tz is None:
+#                 results_df['exit_date'] = results_df['exit_date'].dt.tz_localize('UTC')
+#             else:
+#                 results_df['exit_date'] = results_df['exit_date'].dt.tz_convert('UTC')
+
+#             # Plot 1: Equity & Cash with Trade Markers
+#             plt.figure(figsize=(14, 6))
+#             plt.plot(equity_df['date'], equity_df['cash'], label='Cash', color='blue', alpha=0.7)
+#             plt.plot(equity_df['date'], equity_df['equity'], label='Equity', color='green', alpha=0.7)
+
+#             long_trades = results_df[results_df['trade_type'] == 'long']
+#             short_trades = results_df[results_df['trade_type'] == 'short']
+
+#             for trades, entry_color, exit_color, label_prefix in [
+#                 (long_trades, 'lime', 'green', 'Long'),
+#                 (short_trades, 'red', 'darkred', 'Short')
+#             ]:
+#                 entry_equity = pd.merge_asof(trades[['entry_date']], equity_df[['date', 'equity']], left_on='entry_date', right_on='date', direction='backward')['equity']
+#                 exit_equity = pd.merge_asof(trades[['exit_date']], equity_df[['date', 'equity']], left_on='exit_date', right_on='date', direction='backward')['equity']
+#                 plt.scatter(trades['entry_date'], entry_equity, marker='^', color=entry_color, label=f'{label_prefix} Entry', zorder=5)
+#                 plt.scatter(trades['exit_date'], exit_equity, marker='v', color=exit_color, label=f'{label_prefix} Exit', zorder=5)
+
+#             plt.title('Account Equity and Cash Over Time', fontsize=16)
+#             plt.ylabel('Account Value ($)', fontsize=14)
+#             plt.xlabel('Date', fontsize=14)
+#             plt.grid(True)
+#             plt.legend(fontsize=12)
+#             plt.tight_layout()
+#             plt.show()
+
+#             # Plot 2: Underlying Price
+#             filtered_underlying = self.underlying_data.copy()
+#             filtered_underlying = filtered_underlying.sort_values('timestamp')
+#             plt.figure(figsize=(14, 6))
+#             plt.plot(filtered_underlying['timestamp'], filtered_underlying['close'], label='Underlying Price', color='black')
+#             plt.title('Underlying Price Over Time', fontsize=16)
+#             plt.ylabel('Price', fontsize=14)
+#             plt.xlabel('Date', fontsize=14)
+#             plt.grid(True)
+#             plt.legend(fontsize=12)
+#             plt.tight_layout()
+#             plt.show()
+
+#             # Plot 3: Volatility
+#             vol_realized = self.underlying_data.sort_values('timestamp')
+#             vol_pred = self.vol_predictions.sort_values('prediction_day')
+#             plt.figure(figsize=(14, 6))
+#             plt.plot(vol_realized['timestamp'], vol_realized['realized_vol'], label='Realized Vol', color='blue')
+#             plt.plot(vol_pred['prediction_day'], vol_pred['predicted_vol'], label='Predicted Vol', color='orange')
+#             plt.title('Volatility (Realized & Predicted)', fontsize=16)
+#             plt.ylabel('Volatility', fontsize=14)
+#             plt.xlabel('Date', fontsize=14)
+#             plt.grid(True)
+#             plt.legend(fontsize=12)
+#             plt.tight_layout()
+#             plt.show()
+
+#             # Plot 4: Number of Open Trades
+#             all_dates = pd.to_datetime(equity_df['date'])
+#             open_trades_series = pd.Series(0, index=all_dates)
+#             for _, row in results_df.iterrows():
+#                 mask = (open_trades_series.index >= row['entry_date']) & (open_trades_series.index < row['exit_date'])
+#                 open_trades_series[mask] += 1
+#             plt.figure(figsize=(14, 6))
+#             plt.step(open_trades_series.index, open_trades_series.values, where='post', color='purple', label='Open Trades')
+#             plt.fill_between(open_trades_series.index, open_trades_series.values, step='post', alpha=0.2, color='purple')
+#             plt.title('Number of Open Trades Over Time', fontsize=16)
+#             plt.ylabel('Open Trades', fontsize=14)
+#             plt.xlabel('Date', fontsize=14)
+#             plt.grid(True)
+#             plt.legend(fontsize=12)
+#             plt.tight_layout()
+#             plt.show()
+
+#             # Plot 5: Cumulative Returns
+#             equity_df = equity_df.copy()
+#             equity_df['returns'] = equity_df['equity'].pct_change()
+#             equity_df['cum_return'] = (1 + equity_df['returns'].fillna(0)).cumprod() - 1
+#             plt.figure(figsize=(14, 6))
+#             plt.plot(equity_df['date'], equity_df['cum_return'], color='teal')
+#             plt.title('Cumulative Return Over Time', fontsize=16)
+#             plt.ylabel('Cumulative Return', fontsize=14)
+#             plt.xlabel('Date', fontsize=14)
+#             plt.grid(True)
+#             plt.tight_layout()
+#             plt.show()
+
+#             # Plot 6: Trade Return Histogram (long vs short)
+#             # Plot 6: Trade Return Histogram (long vs short)
+#             results_df = results_df.copy()
+#             results_df['return_pct'] = 100 * results_df['pnl'] / (abs(results_df['entry_price']) * results_df['n_butterflies'])
+#             plt.figure(figsize=(14, 8))
+#             sns.histplot(data=results_df, x='return_pct', hue='trade_type', bins=40, kde=True, element='step', common_norm=False)
+#             plt.axvline(0, color='gray', linestyle='--')
+#             plt.title('Distribution of Trade Returns by Type')
+#             plt.xlabel('Trade Return (%)')
+#             plt.tight_layout()
+#             plt.show()
+#         else:
+#             print("No equity data to plot.")
+
+# Individual plots for backtest results and additional analysis
+    def plot_results(self, results_df, equity_df):
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
+        import seaborn as sns
         import pandas as pd
 
         if not equity_df.empty and not results_df.empty:
-            if 'date' in equity_df.columns:
-                all_dates = pd.to_datetime(equity_df['date'])
-            else:
-                all_dates = pd.to_datetime(equity_df.index)
-            all_dates = pd.DatetimeIndex(all_dates)
-            if all_dates.tz is None:
-                all_dates = all_dates.tz_localize('UTC')
-            else:
-                all_dates = all_dates.tz_convert('UTC')
-
-            first_trade_date = pd.to_datetime(results_df['entry_date']).min()
-            if first_trade_date.tzinfo is None:
-                first_trade_date = first_trade_date.tz_localize('UTC')
-            else:
-                first_trade_date = first_trade_date.tz_convert('UTC')
-
-            all_dates = all_dates[all_dates >= first_trade_date]
-
             equity_df['date'] = pd.to_datetime(equity_df['date'])
             if equity_df['date'].dt.tz is None:
                 equity_df['date'] = equity_df['date'].dt.tz_localize('UTC')
             else:
                 equity_df['date'] = equity_df['date'].dt.tz_convert('UTC')
 
-            equity_df_plot = equity_df[equity_df['date'].isin(all_dates)].copy()
+            equity_df = equity_df.sort_values('date')
 
-            entries = pd.to_datetime(results_df['entry_date'])
-            exits = pd.to_datetime(results_df['exit_date'])
-            if entries.dt.tz is None:
-                entries = entries.dt.tz_localize('UTC')
+            results_df['entry_date'] = pd.to_datetime(results_df['entry_date'])
+            results_df['exit_date'] = pd.to_datetime(results_df['exit_date'])
+            if results_df['entry_date'].dt.tz is None:
+                results_df['entry_date'] = results_df['entry_date'].dt.tz_localize('UTC')
             else:
-                entries = entries.dt.tz_convert('UTC')
-            if exits.dt.tz is None:
-                exits = exits.dt.tz_localize('UTC')
+                results_df['entry_date'] = results_df['entry_date'].dt.tz_convert('UTC')
+            if results_df['exit_date'].dt.tz is None:
+                results_df['exit_date'] = results_df['exit_date'].dt.tz_localize('UTC')
             else:
-                exits = exits.dt.tz_convert('UTC')
+                results_df['exit_date'] = results_df['exit_date'].dt.tz_convert('UTC')
 
+            # Plot 1: Equity & Cash with Trade Markers
+            plt.figure(figsize=(14, 5))
+            plt.plot(equity_df['date'], equity_df['cash'], label='Cash', color='blue', alpha=0.7)
+            plt.plot(equity_df['date'], equity_df['equity'], label='Equity', color='green', alpha=0.7)
+
+            long_trades = results_df[results_df['trade_type'] == 'long']
+            short_trades = results_df[results_df['trade_type'] == 'short']
+
+            for trades, entry_color, exit_color, label_prefix in [
+                (long_trades, 'lime', 'green', 'Long'),
+                (short_trades, 'red', 'darkred', 'Short')
+            ]:
+                entry_equity = pd.merge_asof(trades[['entry_date']], equity_df[['date', 'equity']], left_on='entry_date', right_on='date', direction='backward')['equity']
+                exit_equity = pd.merge_asof(trades[['exit_date']], equity_df[['date', 'equity']], left_on='exit_date', right_on='date', direction='backward')['equity']
+                plt.scatter(trades['entry_date'], entry_equity, marker='^', color=entry_color, label=f'{label_prefix} Entry', zorder=5)
+                plt.scatter(trades['exit_date'], exit_equity, marker='v', color=exit_color, label=f'{label_prefix} Exit', zorder=5)
+
+            plt.title('Account Equity and Cash Over Time')
+            plt.ylabel('Account Value ($)')
+            plt.grid(True)
+            plt.legend()
+            plt.tight_layout()
+            plt.show()
+
+            # Plot 2: Underlying Price
+            filtered_underlying = self.underlying_data.copy()
+            filtered_underlying = filtered_underlying.sort_values('timestamp')
+            plt.figure(figsize=(14, 4))
+            plt.plot(filtered_underlying['timestamp'], filtered_underlying['close'], label='Underlying Price', color='black')
+            plt.title('Underlying Price Over Time')
+            plt.grid(True)
+            plt.tight_layout()
+            plt.show()
+
+            # Plot 3: Volatility
+            vol_realized = self.underlying_data.sort_values('timestamp')
+            vol_pred = self.vol_predictions.sort_values('prediction_day')
+            plt.figure(figsize=(14, 4))
+            plt.plot(vol_realized['timestamp'], vol_realized['realized_vol'], label='Realized Vol', color='blue')
+            plt.plot(vol_pred['prediction_day'], vol_pred['predicted_vol'], label='Predicted Vol', color='orange')
+            plt.title('Volatility (Realized & Predicted)')
+            plt.grid(True)
+            plt.legend()
+            plt.tight_layout()
+            plt.show()
+
+            # Plot 4: Number of Open Trades
+            all_dates = pd.to_datetime(equity_df['date'])
             open_trades_series = pd.Series(0, index=all_dates)
-            for entry, exit_ in zip(entries, exits):
-                mask = (open_trades_series.index >= entry) & (open_trades_series.index < exit_)
+            for _, row in results_df.iterrows():
+                mask = (open_trades_series.index >= row['entry_date']) & (open_trades_series.index < row['exit_date'])
                 open_trades_series[mask] += 1
+            plt.figure(figsize=(14, 3))
+            plt.step(open_trades_series.index, open_trades_series.values, where='post', color='purple', label='Open Trades')
+            plt.fill_between(open_trades_series.index, open_trades_series.values, step='post', alpha=0.2, color='purple')
+            plt.title('Number of Open Trades Over Time')
+            plt.ylabel('Open Trades')
+            plt.grid(True)
+            plt.tight_layout()
+            plt.show()
 
-            fig, axs = plt.subplots(4, 1, figsize=(16, 16), sharex=True, gridspec_kw={'height_ratios': [2, 1, 1, 1]})
+            # Plot 5: Cumulative Returns
+            equity_df = equity_df.copy()
+            equity_df['returns'] = equity_df['equity'].pct_change()
+            equity_df['cum_return'] = (1 + equity_df['returns'].fillna(0)).cumprod() - 1
+            plt.figure(figsize=(14, 4))
+            plt.plot(equity_df['date'], equity_df['cum_return'], color='teal')
+            plt.title('Cumulative Return Over Time')
+            plt.ylabel('Cumulative Return')
+            plt.grid(True)
+            plt.tight_layout()
+            plt.show()
 
-            axs[0].plot(equity_df_plot['date'], equity_df_plot['cash'], label='Cash', color='blue', alpha=0.7)
-            axs[0].plot(equity_df_plot['date'], equity_df_plot['equity'], label='Equity', color='green', alpha=0.7)
-            axs[0].set_ylabel('Account Value ($)')
-            axs[0].set_title('Account Equity & Cash with Trade Markers')
-            axs[0].grid(True)
-            axs[0].legend(loc='upper left')
-
-            long_trades = results_df[results_df['trade_type'] == 'long'].copy()
-            short_trades = results_df[results_df['trade_type'] == 'short'].copy()
-
-            equity_df_plot = equity_df_plot.sort_values('date')
-            long_trades = long_trades.sort_values('entry_date')
-            short_trades = short_trades.sort_values('entry_date')
-
-            # Ensure all datetime columns are proper timezone-aware datetime64[ns, UTC]
-            equity_df_plot['date'] = pd.to_datetime(equity_df_plot['date'])
-            long_trades['entry_date'] = pd.to_datetime(long_trades['entry_date'])
-            short_trades['entry_date'] = pd.to_datetime(short_trades['entry_date'])
-            long_trades['exit_date'] = pd.to_datetime(long_trades['exit_date'])
-            short_trades['exit_date'] = pd.to_datetime(short_trades['exit_date'])
-
-            for col in ['entry_date', 'exit_date']:
-                for df in [long_trades, short_trades]:
-                    if df[col].dt.tz is None:
-                        df[col] = df[col].dt.tz_localize('UTC')
-                    else:
-                        df[col] = df[col].dt.tz_convert('UTC')
-
-            long_entry_equity = pd.merge_asof(long_trades[['entry_date']], equity_df_plot[['date', 'equity']], left_on='entry_date', right_on='date', direction='backward')['equity']
-            short_entry_equity = pd.merge_asof(short_trades[['entry_date']], equity_df_plot[['date', 'equity']], left_on='entry_date', right_on='date', direction='backward')['equity']
-            long_exit_equity = pd.merge_asof(long_trades[['exit_date']], equity_df_plot[['date', 'equity']], left_on='exit_date', right_on='date', direction='backward')['equity']
-            short_exit_equity = pd.merge_asof(short_trades[['exit_date']], equity_df_plot[['date', 'equity']], left_on='exit_date', right_on='date', direction='backward')['equity']
-
-            axs[0].scatter(long_trades['entry_date'], long_entry_equity, marker='^', color='lime', label='Long Entry', zorder=5)
-            axs[0].scatter(short_trades['entry_date'], short_entry_equity, marker='^', color='red', label='Short Entry', zorder=5)
-            axs[0].scatter(long_trades['exit_date'], long_exit_equity, marker='v', color='green', label='Long Exit', zorder=5)
-            axs[0].scatter(short_trades['exit_date'], short_exit_equity, marker='v', color='darkred', label='Short Exit', zorder=5)
-            axs[0].legend(loc='upper left', ncol=2)
-
-            underlying_filtered = self.underlying_data[self.underlying_data['timestamp'] >= first_trade_date]
-            axs[1].plot(underlying_filtered['timestamp'], underlying_filtered['close'], label='Underlying Price', color='black')
-            axs[1].set_ylabel('Underlying Price')
-            axs[1].set_title('Underlying Price')
-            axs[1].legend(loc='upper left')
-            axs[1].grid(True)
-
-            vol_realized_filtered = self.underlying_data[self.underlying_data['timestamp'] >= first_trade_date]
-            vol_pred_filtered = self.vol_predictions[self.vol_predictions['prediction_day'] >= first_trade_date]
-            axs[2].plot(vol_realized_filtered['timestamp'], vol_realized_filtered['realized_vol'], label='Realized Vol', color='blue')
-            axs[2].plot(vol_pred_filtered['prediction_day'], vol_pred_filtered['predicted_vol'], label='Predicted Vol', color='orange')
-            axs[2].set_ylabel('Volatility')
-            axs[2].set_title('Volatility (Realized & Predicted)')
-            axs[2].legend(loc='upper left')
-            axs[2].grid(True)
-
-            axs[3].step(open_trades_series.index, open_trades_series.values, where='post', color='purple', alpha=0.8, label='Open Trades')
-            axs[3].fill_between(open_trades_series.index, open_trades_series.values, step='post', color='purple', alpha=0.2)
-            axs[3].set_ylabel('Open Trades')
-            axs[3].set_xlabel('Date')
-            axs[3].set_title('Number of Open Trades Over Time')
-            axs[3].grid(True)
-            axs[3].legend(loc='upper left')
-
-            axs[3].xaxis.set_major_locator(mdates.MonthLocator())
-            axs[3].xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-            plt.xticks(rotation=45)
+            # Plot 6: Trade Return Histogram (long vs short)
+            results_df = results_df.copy()
+            results_df['return_pct'] = 100 * results_df['pnl'] / (abs(results_df['entry_price']) * results_df['n_butterflies'])
+            plt.figure(figsize=(14, 5))
+            sns.histplot(data=results_df, x='return_pct', hue='trade_type', bins=40, kde=True, element='step', common_norm=False)
+            plt.axvline(0, color='gray', linestyle='--')
+            plt.title('Distribution of Trade Returns by Type')
+            plt.xlabel('Trade Return (%)')
             plt.tight_layout()
             plt.show()
         else:
             print("No equity data to plot.")
+
+
+
+# # Full plotting logic
+#     def plot_results(self, results_df, equity_df):  
+#         import matplotlib.pyplot as plt
+#         import matplotlib.dates as mdates
+#         import pandas as pd
+
+#         if not equity_df.empty and not results_df.empty:
+#             if 'date' in equity_df.columns:
+#                 all_dates = pd.to_datetime(equity_df['date'])
+#             else:
+#                 all_dates = pd.to_datetime(equity_df.index)
+#             all_dates = pd.DatetimeIndex(all_dates)
+#             if all_dates.tz is None:
+#                 all_dates = all_dates.tz_localize('UTC')
+#             else:
+#                 all_dates = all_dates.tz_convert('UTC')
+
+#             first_trade_date = pd.to_datetime(results_df['entry_date']).min()
+#             if first_trade_date.tzinfo is None:
+#                 first_trade_date = first_trade_date.tz_localize('UTC')
+#             else:
+#                 first_trade_date = first_trade_date.tz_convert('UTC')
+
+#             all_dates = all_dates[all_dates >= first_trade_date]
+
+#             equity_df['date'] = pd.to_datetime(equity_df['date'])
+#             if equity_df['date'].dt.tz is None:
+#                 equity_df['date'] = equity_df['date'].dt.tz_localize('UTC')
+#             else:
+#                 equity_df['date'] = equity_df['date'].dt.tz_convert('UTC')
+
+#             equity_df_plot = equity_df[equity_df['date'].isin(all_dates)].copy()
+
+#             entries = pd.to_datetime(results_df['entry_date'])
+#             exits = pd.to_datetime(results_df['exit_date'])
+#             if entries.dt.tz is None:
+#                 entries = entries.dt.tz_localize('UTC')
+#             else:
+#                 entries = entries.dt.tz_convert('UTC')
+#             if exits.dt.tz is None:
+#                 exits = exits.dt.tz_localize('UTC')
+#             else:
+#                 exits = exits.dt.tz_convert('UTC')
+
+#             open_trades_series = pd.Series(0, index=all_dates)
+#             for entry, exit_ in zip(entries, exits):
+#                 mask = (open_trades_series.index >= entry) & (open_trades_series.index < exit_)
+#                 open_trades_series[mask] += 1
+
+#             fig, axs = plt.subplots(4, 1, figsize=(16, 16), sharex=True, gridspec_kw={'height_ratios': [2, 1, 1, 1]})
+
+#             axs[0].plot(equity_df_plot['date'], equity_df_plot['cash'], label='Cash', color='blue', alpha=0.7)
+#             axs[0].plot(equity_df_plot['date'], equity_df_plot['equity'], label='Equity', color='green', alpha=0.7)
+#             axs[0].set_ylabel('Account Value ($)')
+#             axs[0].set_title('Account Equity & Cash with Trade Markers')
+#             axs[0].grid(True)
+#             axs[0].legend(loc='upper left')
+
+#             long_trades = results_df[results_df['trade_type'] == 'long'].copy()
+#             short_trades = results_df[results_df['trade_type'] == 'short'].copy()
+
+#             equity_df_plot = equity_df_plot.sort_values('date')
+#             long_trades = long_trades.sort_values('entry_date')
+#             short_trades = short_trades.sort_values('entry_date')
+
+#             # Ensure all datetime columns are proper timezone-aware datetime64[ns, UTC]
+#             equity_df_plot['date'] = pd.to_datetime(equity_df_plot['date'])
+#             long_trades['entry_date'] = pd.to_datetime(long_trades['entry_date'])
+#             short_trades['entry_date'] = pd.to_datetime(short_trades['entry_date'])
+#             long_trades['exit_date'] = pd.to_datetime(long_trades['exit_date'])
+#             short_trades['exit_date'] = pd.to_datetime(short_trades['exit_date'])
+
+#             for col in ['entry_date', 'exit_date']:
+#                 for df in [long_trades, short_trades]:
+#                     if df[col].dt.tz is None:
+#                         df[col] = df[col].dt.tz_localize('UTC')
+#                     else:
+#                         df[col] = df[col].dt.tz_convert('UTC')
+
+#             long_entry_equity = pd.merge_asof(long_trades[['entry_date']], equity_df_plot[['date', 'equity']], left_on='entry_date', right_on='date', direction='backward')['equity']
+#             short_entry_equity = pd.merge_asof(short_trades[['entry_date']], equity_df_plot[['date', 'equity']], left_on='entry_date', right_on='date', direction='backward')['equity']
+#             long_exit_equity = pd.merge_asof(long_trades[['exit_date']], equity_df_plot[['date', 'equity']], left_on='exit_date', right_on='date', direction='backward')['equity']
+#             short_exit_equity = pd.merge_asof(short_trades[['exit_date']], equity_df_plot[['date', 'equity']], left_on='exit_date', right_on='date', direction='backward')['equity']
+
+#             axs[0].scatter(long_trades['entry_date'], long_entry_equity, marker='^', color='lime', label='Long Entry', zorder=5)
+#             axs[0].scatter(short_trades['entry_date'], short_entry_equity, marker='^', color='red', label='Short Entry', zorder=5)
+#             axs[0].scatter(long_trades['exit_date'], long_exit_equity, marker='v', color='green', label='Long Exit', zorder=5)
+#             axs[0].scatter(short_trades['exit_date'], short_exit_equity, marker='v', color='darkred', label='Short Exit', zorder=5)
+#             axs[0].legend(loc='upper left', ncol=2)
+
+#             underlying_filtered = self.underlying_data[self.underlying_data['timestamp'] >= first_trade_date]
+#             underlying_filtered = underlying_filtered.sort_values('timestamp')  # ✅ Fix plot line glitch
+#             axs[1].plot(underlying_filtered['timestamp'], underlying_filtered['close'], label='Underlying Price', color='black')
+#             axs[1].set_ylabel('Underlying Price')
+#             axs[1].set_title('Underlying Price')
+#             axs[1].legend(loc='upper left')
+#             axs[1].grid(True)
+
+#             vol_realized_filtered = self.underlying_data[self.underlying_data['timestamp'] >= first_trade_date]
+#             vol_realized_filtered = vol_realized_filtered.sort_values('timestamp')
+#             vol_pred_filtered = self.vol_predictions[self.vol_predictions['prediction_day'] >= first_trade_date]
+#             vol_pred_filtered = vol_pred_filtered.sort_values('prediction_day')
+#             axs[2].plot(vol_realized_filtered['timestamp'], vol_realized_filtered['realized_vol'], label='Realized Vol', color='blue')
+#             axs[2].plot(vol_pred_filtered['prediction_day'], vol_pred_filtered['predicted_vol'], label='Predicted Vol', color='orange')
+#             axs[2].set_ylabel('Volatility')
+#             axs[2].set_title('Volatility (Realized & Predicted)')
+#             axs[2].legend(loc='upper left')
+#             axs[2].grid(True)
+
+#             axs[3].step(open_trades_series.index, open_trades_series.values, where='post', color='purple', alpha=0.8, label='Open Trades')
+#             axs[3].fill_between(open_trades_series.index, open_trades_series.values, step='post', color='purple', alpha=0.2)
+#             axs[3].set_ylabel('Open Trades')
+#             axs[3].set_xlabel('Date')
+#             axs[3].set_title('Number of Open Trades Over Time')
+#             axs[3].grid(True)
+#             axs[3].legend(loc='upper left')
+
+#             axs[3].xaxis.set_major_locator(mdates.MonthLocator())
+#             axs[3].xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+#             plt.xticks(rotation=45)
+#             plt.tight_layout()
+#             plt.show()
+#         else:
+#             print("No equity data to plot.")
 
 
     
@@ -597,7 +838,9 @@ class ButterflyBacktest_long_short:
                                     n_butterflies = min(int(max_invest_today // abs(total_cost_per_butterfly)), max_liquidity)
                                     if n_butterflies >= 1:
                                         total_entry_cost = total_cost_per_butterfly * n_butterflies
+                                        #print(f"[DEBUG ENTRY] Entry price: {entry_price}, Total cost per butterfly: {total_cost_per_butterfly}, n_butterflies: {n_butterflies}, Total entry cost: {total_entry_cost}")
                                         cash -= total_entry_cost
+                                        #print(f"[DEBUG ENTRY] Cash after entry: {cash}")
                                         open_trades.append({
                                             'entry_date': day,
                                             'expiry': expiry,
@@ -629,92 +872,107 @@ class ButterflyBacktest_long_short:
             for i, trade in enumerate(open_trades):
                 expiry_date = trade['expiry'].date() if hasattr(trade['expiry'], 'date') else trade['expiry']
 
-                if expiry_date < day:
-                    print(f"Force-removing expired trade from {trade['entry_date']} on {day}")
+                # Ensure we close the trade on or after expiry date
+                if day >= expiry_date:
+                    print(f"Closing expired trade from {trade['entry_date']} on {day}")
+                    exit_prices = self.get_exit_prices(trade['butterfly'], day)
+                    incomplete = any(pd.isna(exit_prices[leg]) for leg in exit_prices)
+
+                    if incomplete:
+                        print(f"[FORCED CLOSE] Trade entered {trade['entry_date']} could not fetch complete exit prices on {day}. Forcing close and refunding cost.")
+                        cash += trade['total_cost']
+                        to_remove.append(i)
+                        continue
+
+                    if trade['trade_type'] == 'long':
+                        exit_price = exit_prices['long1'] + exit_prices['long3'] - 2 * exit_prices['short2']
+                        exit_slippage = self.slippage * (abs(exit_prices['long1']) + abs(exit_prices['long3']) + 2 * abs(exit_prices['short2']))
+                    else:
+                        exit_price = -exit_prices['short1'] + 2 * exit_prices['long2'] - exit_prices['short3']
+                        exit_slippage = self.slippage * (abs(exit_prices['short1']) + abs(exit_prices['short3']) + 2 * abs(exit_prices['long2']))
+
+                    total_exit_value = exit_price * trade['n_butterflies']
+                    total_slippage_all = (trade['slippage'] + exit_slippage) * trade['n_butterflies']
+                    total_commission_all = trade['commission'] * trade['n_butterflies']
+                    pnl = (exit_price - trade['entry_price'] - trade['commission'] - trade['slippage'] - exit_slippage) * trade['n_butterflies']
+                    cash += total_exit_value
+
+                    # print(f"[DEBUG EXIT] Entry date: {trade['entry_date']}, Exit date: {day}")
+                    # print(f"[DEBUG EXIT] Exit prices: {exit_prices}")
+                    # print(f"[DEBUG EXIT] Entry price: {trade['entry_price']}, Exit price: {exit_price}")
+                    # print(f"[DEBUG EXIT] Total butterflies: {trade['n_butterflies']}")
+                    # print(f"[DEBUG EXIT] Total exit value: {total_exit_value}")
+                    # print(f"[DEBUG EXIT] Cash before: {cash - total_exit_value}, Cash after: {cash}")
+
+                    if trade['trade_type'] == 'long':
+                        strikes = (
+                            trade['butterfly']['long1']['strike_price'],
+                            trade['butterfly']['short2']['strike_price'],
+                            trade['butterfly']['long3']['strike_price']
+                        )
+                        option_prices_entry = (
+                            trade['butterfly']['long1']['opt_close'],
+                            trade['butterfly']['short2']['opt_close'],
+                            trade['butterfly']['long3']['opt_close']
+                        )
+                        option_prices_exit = (
+                            exit_prices['long1'],
+                            exit_prices['short2'],
+                            exit_prices['long3']
+                        )
+                    else:
+                        strikes = (
+                            trade['butterfly']['short1']['strike_price'],
+                            trade['butterfly']['long2']['strike_price'],
+                            trade['butterfly']['short3']['strike_price']
+                        )
+                        option_prices_entry = (
+                            trade['butterfly']['short1']['opt_close'],
+                            trade['butterfly']['long2']['opt_close'],
+                            trade['butterfly']['short3']['opt_close']
+                        )
+                        option_prices_exit = (
+                            exit_prices['short1'],
+                            exit_prices['long2'],
+                            exit_prices['short3']
+                        )
+
+                    results.append({
+                        'entry_date': trade['entry_date'],
+                        'exit_date': day,
+                        'expiry': trade['expiry'],
+                        'entry_price': trade['entry_price'],
+                        'exit_price': exit_price,
+                        'n_butterflies': trade['n_butterflies'],
+                        'pnl': pnl,
+                        'underlying_price_entry': self.underlying_data.loc[self.underlying_data['timestamp'].dt.date == trade['entry_date'], 'close'].values[0],
+                        'underlying_price_exit': self.underlying_data.loc[self.underlying_data['timestamp'].dt.date == day, 'close'].values[0],
+                        'strikes': strikes,
+                        'option_prices_entry': option_prices_entry,
+                        'option_prices_exit': option_prices_exit,
+                        'pred_vol_entry': trade['pred_vol_entry'],
+                        'commission': total_commission_all,
+                        'slippage': total_slippage_all,
+                        'cash_after_trade': cash,
+                        'early_exit': False,
+                        'trade_type': trade['trade_type']
+                    })
                     to_remove.append(i)
                     continue
 
                 alarm = self.should_exit_early(trade, day)
-                is_expiry = (expiry_date == day)
-                if not (alarm or is_expiry):
+                if not alarm:
                     continue
 
+                # --- Early exit code block remains unchanged ---
                 exit_prices = self.get_exit_prices(trade['butterfly'], day)
                 incomplete = any(pd.isna(exit_prices[leg]) for leg in exit_prices)
 
                 if incomplete:
-                    print(f"Skipping trade entered {trade['entry_date']} - incomplete price on {day}. Force-close.")
+                    print(f"[FORCED CLOSE] Early exit triggered but prices unavailable for trade entered {trade['entry_date']} on {day}. Refunding.")
                     cash += trade['total_cost']
                     to_remove.append(i)
                     continue
-
-                if trade['trade_type'] == 'long':
-                    exit_price = exit_prices['long1'] + exit_prices['long3'] - 2 * exit_prices['short2']
-                    exit_slippage = self.slippage * (abs(exit_prices['long1']) + abs(exit_prices['long3']) + 2 * abs(exit_prices['short2']))
-                else:
-                    exit_price = -exit_prices['short1'] + 2 * exit_prices['long2'] - exit_prices['short3']
-                    exit_slippage = self.slippage * (abs(exit_prices['short1']) + abs(exit_prices['short3']) + 2 * abs(exit_prices['long2']))
-
-                total_exit_value = exit_price * trade['n_butterflies']
-                total_slippage_all = (trade['slippage'] + exit_slippage) * trade['n_butterflies']
-                total_commission_all = trade['commission'] * trade['n_butterflies']
-                pnl = (exit_price - trade['entry_price'] - trade['commission'] - trade['slippage'] - exit_slippage) * trade['n_butterflies']
-                cash += total_exit_value
-
-                if trade['trade_type'] == 'long':
-                    strikes = (
-                        trade['butterfly']['long1']['strike_price'],
-                        trade['butterfly']['short2']['strike_price'],
-                        trade['butterfly']['long3']['strike_price']
-                    )
-                    option_prices_entry = (
-                        trade['butterfly']['long1']['opt_close'],
-                        trade['butterfly']['short2']['opt_close'],
-                        trade['butterfly']['long3']['opt_close']
-                    )
-                    option_prices_exit = (
-                        exit_prices['long1'],
-                        exit_prices['short2'],
-                        exit_prices['long3']
-                    )
-                else:
-                    strikes = (
-                        trade['butterfly']['short1']['strike_price'],
-                        trade['butterfly']['long2']['strike_price'],
-                        trade['butterfly']['short3']['strike_price']
-                    )
-                    option_prices_entry = (
-                        trade['butterfly']['short1']['opt_close'],
-                        trade['butterfly']['long2']['opt_close'],
-                        trade['butterfly']['short3']['opt_close']
-                    )
-                    option_prices_exit = (
-                        exit_prices['short1'],
-                        exit_prices['long2'],
-                        exit_prices['short3']
-                    )
-
-                results.append({
-                    'entry_date': trade['entry_date'],
-                    'exit_date': day,
-                    'expiry': trade['expiry'],
-                    'entry_price': trade['entry_price'],
-                    'exit_price': exit_price,
-                    'n_butterflies': trade['n_butterflies'],
-                    'pnl': pnl,
-                    'underlying_price_entry': self.underlying_data.loc[self.underlying_data['timestamp'].dt.date == trade['entry_date'], 'close'].values[0],
-                    'underlying_price_exit': self.underlying_data.loc[self.underlying_data['timestamp'].dt.date == day, 'close'].values[0],
-                    'strikes': strikes,
-                    'option_prices_entry': option_prices_entry,
-                    'option_prices_exit': option_prices_exit,
-                    'pred_vol_entry': trade['pred_vol_entry'],
-                    'commission': total_commission_all,
-                    'slippage': total_slippage_all,
-                    'cash_after_trade': cash,
-                    'early_exit': alarm,
-                    'trade_type': trade['trade_type']
-                })
-                to_remove.append(i)
 
             for idx in sorted(to_remove, reverse=True):
                 open_trades.pop(idx)
